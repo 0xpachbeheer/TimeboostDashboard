@@ -7,7 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { TransactionVolumeChart } from "@/components/transaction-volume-chart"
-import { Activity, AlertTriangle, CheckCircle, Clock, Search, Zap } from "lucide-react"
+import { Activity, AlertTriangle, CheckCircle, Clock, Search, Zap, Timer } from "lucide-react"
+import { useTimeboost } from "@/lib/timeboost-context"
 
 interface Transaction {
   hash: string
@@ -19,14 +20,16 @@ interface Transaction {
   error?: string
   from: string
   to: string
+  delay: number
+  roundController?: string
 }
 
 interface TransactionMonitorProps {
-  isPaused: boolean
   compact?: boolean
 }
 
-export function TransactionMonitor({ isPaused, compact = false }: TransactionMonitorProps) {
+export function TransactionMonitor({ compact = false }: TransactionMonitorProps) {
+  const { roundInfo, isPaused, isExpressLaneActive } = useTimeboost()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [errorAlerts, setErrorAlerts] = useState<Transaction[]>([])
@@ -37,17 +40,20 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
       const statuses: Transaction["status"][] = ["pending", "confirmed", "failed"]
       const status = statuses[Math.floor(Math.random() * statuses.length)]
       const hasError = status === "failed" || Math.random() < 0.05
+      const isExpressLane = false
 
       return {
         hash: "0x" + Math.random().toString(16).substr(2, 64),
         sequenceNumber: Math.floor(Math.random() * 1000000),
         status,
         gasUsed: Math.floor(Math.random() * 100000) + 21000,
-        timeboostFlag: Math.random() > 0.3,
+        timeboostFlag: isExpressLane,
         timestamp: new Date(),
         error: hasError ? (Math.random() > 0.5 ? "Sequence mismatch" : "Gas limit exceeded") : undefined,
         from: "0x" + Math.random().toString(16).substr(2, 8) + "..." + Math.random().toString(16).substr(2, 4),
         to: "0x" + Math.random().toString(16).substr(2, 8) + "..." + Math.random().toString(16).substr(2, 4),
+        delay: isExpressLane ? 0 : 200,
+        roundController: undefined,
       }
     }
 
@@ -62,15 +68,23 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
 
     const interval = setInterval(
       () => {
+        // Only auction winner gets express lane access
+        const isControllerTransaction = isExpressLaneActive && Math.random() > 0.9 // Controller's transaction
+
         const newTx: Transaction = {
           hash: "0x" + Math.random().toString(16).substr(2, 64),
           sequenceNumber: Math.floor(Math.random() * 1000000),
           status: Math.random() > 0.1 ? "confirmed" : Math.random() > 0.5 ? "pending" : "failed",
           gasUsed: Math.floor(Math.random() * 100000) + 21000,
-          timeboostFlag: Math.random() > 0.3,
+          timeboostFlag: isControllerTransaction,
           timestamp: new Date(),
-          from: "0x" + Math.random().toString(16).substr(2, 8) + "..." + Math.random().toString(16).substr(2, 4),
+          from:
+            isControllerTransaction && roundInfo.controller
+              ? roundInfo.controller
+              : "0x" + Math.random().toString(16).substr(2, 8) + "..." + Math.random().toString(16).substr(2, 4),
           to: "0x" + Math.random().toString(16).substr(2, 8) + "..." + Math.random().toString(16).substr(2, 4),
+          delay: isControllerTransaction ? 0 : 200, // 200ms delay for non-express
+          roundController: isControllerTransaction ? roundInfo.controller : undefined,
         }
 
         // Add error for failed transactions
@@ -85,7 +99,7 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
     ) // Random interval between 1-4 seconds
 
     return () => clearInterval(interval)
-  }, [isPaused])
+  }, [isPaused, isExpressLaneActive, roundInfo.controller])
 
   const filteredTransactions = transactions.filter(
     (tx) =>
@@ -178,6 +192,15 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
             />
           </div>
 
+          {roundInfo.controller && (
+            <Alert variant="secondary" className="mb-4">
+              <Activity className="h-4 w-4" />
+              <AlertDescription>
+                <strong>Current Express Lane Controller:</strong> {roundInfo.controller}
+              </AlertDescription>
+            </Alert>
+          )}
+
           <Table>
             <TableHeader>
               <TableRow>
@@ -187,6 +210,7 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
                 <TableHead>Sequence</TableHead>
                 <TableHead>Gas</TableHead>
                 <TableHead>Timeboost</TableHead>
+                <TableHead>Delay</TableHead>
                 <TableHead>Time</TableHead>
               </TableRow>
             </TableHeader>
@@ -215,6 +239,16 @@ export function TransactionMonitor({ isPaused, compact = false }: TransactionMon
                       </Badge>
                     ) : (
                       <span className="text-muted-foreground">Standard</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {tx.delay > 0 ? (
+                      <div className="flex items-center space-x-2">
+                        <Timer className="h-3 w-3 text-yellow-500" />
+                        <span className="text-muted-foreground">{tx.delay}ms</span>
+                      </div>
+                    ) : (
+                      <span className="text-green-500">Instant</span>
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
